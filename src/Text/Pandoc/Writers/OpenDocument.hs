@@ -32,7 +32,7 @@ import qualified Text.Pandoc.Builder as B
 import Text.Pandoc.Logging
 import Text.Pandoc.Options
 import Text.DocLayout
-import Text.Pandoc.Shared (linesToPara, tshow)
+import Text.Pandoc.Shared (linesToPara, tshow,blocksToInlines)
 import Text.Pandoc.Templates (renderTemplate)
 import qualified Text.Pandoc.Translations as Term (Term(Figure, Table))
 import Text.Pandoc.Writers.Math
@@ -370,9 +370,7 @@ blockToOpenDocument o bs
     | BulletList     b <- bs = setFirstPara >> bulletListToOpenDocument o b
     | OrderedList  a b <- bs = setFirstPara >> orderedList a b
     | CodeBlock    _ s <- bs = setFirstPara >> preformatted s
-    | Table _ bc s th tb tf
-                       <- bs = let (c, a, w, h, r) = toLegacyTable bc s th tb tf
-                               in setFirstPara >> table c a w h r
+    | Table _ bc s th tb _ <- bs =  setFirstPara >> table bc s th tb
     | HorizontalRule   <- bs = setFirstPara >> return (selfClosingTag "text:p"
                                 [ ("text:style-name", "Horizontal_20_Line") ])
     | RawBlock f     s <- bs = if f == Format "opendocument"
@@ -395,29 +393,34 @@ blockToOpenDocument o bs
       orderedList a b = do (ln,pn) <- newOrderedListStyle (isTightList b) a
                            inTags True "text:list" [ ("text:style-name", "L" <> tshow ln)]
                                       <$> orderedListToOpenDocument o pn b
-      table c a w h r = do
+      table :: PandocMonad m =>
+               Caption -> [ColSpec] -> TableHead -> [TableBody] ->
+               OD m (Doc Text)
+      table (Caption _ c) cs h b = do
         tn <- length <$> gets stTableStyles
         pn <- length <$> gets stParaStyles
         let  genIds      = map chr [65..]
              name        = "Table" <> tshow (tn + 1)
-             columnIds   = zip genIds w
+             (aligns, mwidths) = unzip cs
+             fromWidth (ColWidth w) | w > 0 = w
+             fromWidth _                    = 0
+             widths = map fromWidth mwidths
+             columnIds   = zip genIds widths
              mkColumn  n = selfClosingTag "table:table-column" [("table:style-name", name <> "." <> T.singleton (fst n))]
              columns     = map mkColumn columnIds
-             paraHStyles = paraTableStyles "Heading"  pn a
-             paraStyles  = paraTableStyles "Contents" (pn + length (newPara paraHStyles)) a
+             paraHStyles = paraTableStyles "Heading"  pn aligns
+             paraStyles  = paraTableStyles "Contents" (pn + length (newPara paraHStyles)) aligns
              newPara     = map snd . filter (not . isEmpty . snd)
         addTableStyle $ tableStyle tn columnIds
         mapM_ addParaStyle . newPara $ paraHStyles ++ paraStyles
         captionDoc <- if null c
                       then return empty
-                      else inlinesToOpenDocument o c >>=
+                      else inlinesToOpenDocument o (blocksToInlines c) >>=
                              if isEnabled Ext_native_numbering o
                                 then numberedTableCaption
                                 else unNumberedCaption "TableCaption"
-        th <- if all null h
-                 then return empty
-                 else colHeadsToOpenDocument o (map fst paraHStyles) h
-        tr <- mapM (tableRowToOpenDocument o (map fst paraStyles)) r
+        th <- colHeadsToOpenDocument o (map fst paraHStyles) h
+        tr <- mapM (tableBodyToOpenDocument o (map fst paraStyles)) b
         let tableDoc = inTags True "table:table" [
                             ("table:name"      , name)
                           , ("table:style-name", name)
@@ -463,26 +466,42 @@ unNumberedCaption :: Monad m => Text -> Doc Text -> OD m (Doc Text)
 unNumberedCaption style caption = return $ inParagraphTagsWithStyle style caption
 
 colHeadsToOpenDocument :: PandocMonad m
-                       => WriterOptions -> [Text] -> [[Block]]
+                       => WriterOptions -> [Text] -> TableHead
                        -> OD m (Doc Text)
-colHeadsToOpenDocument o ns hs =
-    inTagsIndented "table:table-header-rows" . inTagsIndented "table:table-row" . vcat <$>
-    mapM (tableItemToOpenDocument o "TableHeaderRowCell") (zip ns hs)
+colHeadsToOpenDocument o ns (TableHead _ hs) =
+  case hs of
+    [] -> return empty
+    (x:_) ->
+        let (Row _  c) = x
+        in inTagsIndented "table:table-header-rows" .
+        inTagsIndented "table:table-row" .
+        vcat <$> mapM (tableItemToOpenDocument o "TableHeaderRowCell") (zip ns c)
+
+tableBodyToOpenDocument:: PandocMonad m
+                       => WriterOptions -> [Text] -> TableBody
+                       -> OD m (Doc Text)
+tableBodyToOpenDocument o ns tb =
+    let (TableBody _ _ _ r) = tb
+    in vcat <$> mapM (tableRowToOpenDocument o ns) r
 
 tableRowToOpenDocument :: PandocMonad m
-                       => WriterOptions -> [Text] -> [[Block]]
+                       => WriterOptions -> [Text] -> Row
                        -> OD m (Doc Text)
-tableRowToOpenDocument o ns cs =
-    inTagsIndented "table:table-row" . vcat <$>
-    mapM (tableItemToOpenDocument o "TableRowCell") (zip ns cs)
+tableRowToOpenDocument o ns r =
+    let (Row _ c) = r
+    in inTagsIndented "table:table-row" . vcat <$>
+    mapM (tableItemToOpenDocument o "TableRowCell") (zip ns c)
 
 tableItemToOpenDocument :: PandocMonad m
-                        => WriterOptions -> Text -> (Text,[Block])
+                        => WriterOptions -> Text -> (Text,Cell)
                         -> OD m (Doc Text)
-tableItemToOpenDocument o s (n,i) =
-  let a = [ ("table:style-name" , s )
-          , ("office:value-type", "string"     )
-          ]
+tableItemToOpenDocument o s (n,c) =
+  let (Cell _ _ _ (ColSpan cs) i) = c
+      csa = case cs of
+          1 -> []
+          _ -> [("table:number-columns-spanned", tshow cs)]
+      a = [ ("table:style-name" , s )
+          , ("office:value-type", "string" ) ] ++ csa
   in  inTags True "table:table-cell" a <$>
       withParagraphStyle o n (map plainToPara i)
 
