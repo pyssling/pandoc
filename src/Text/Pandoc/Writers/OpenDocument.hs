@@ -35,6 +35,7 @@ import Text.DocLayout
 import Text.Pandoc.Shared (linesToPara, tshow,blocksToInlines)
 import Text.Pandoc.Templates (renderTemplate)
 import qualified Text.Pandoc.Translations as Term (Term(Figure, Table))
+import Text.Pandoc.Walk
 import Text.Pandoc.Writers.Math
 import Text.Pandoc.Writers.Shared
 import Text.Pandoc.XML
@@ -66,6 +67,9 @@ data WriterState =
                 , stImageId        :: Int
                 , stTableCaptionId :: Int
                 , stImageCaptionId :: Int
+                , stHeaderRefs     :: [Text]
+                , stTableRefs      :: [Text]
+                , stImageRefs      :: [Text]
                 }
 
 defaultWriterState :: WriterState
@@ -83,6 +87,9 @@ defaultWriterState =
                 , stImageId        = 1
                 , stTableCaptionId = 1
                 , stImageCaptionId = 1
+                , stHeaderRefs     = []
+                , stTableRefs      = []
+                , stImageRefs      = []
                 }
 
 when :: Bool -> Doc Text -> Doc Text
@@ -232,6 +239,17 @@ writeOpenDocument opts (Pandoc meta blocks) = do
                         meta
   ((body, metadata),s) <- flip runStateT
         defaultWriterState $ do
+           let isHeaderIdent (Header _ (ident,_,_) _) = [ident]
+               isHeaderIdent _ = []
+           modify $ \s -> s{ stHeaderRefs = query isHeaderIdent blocks }
+-- Table Attr Caption [ColSpec] TableHead [TableBody] TableFoot           
+           let isTableIdent (Table (ident,_,_) _ _ _ _ _) = [ident]
+               isTableIdent _ = []
+           modify $ \s -> s{ stTableRefs = query isTableIdent blocks }
+-- [Image ("file-menu",[],[("width","40%")]) [Str "File",Space,Str "Menu."] ("figures/file-menu.png","fig:")]           
+           let isImageIdent (Image (ident,_,_) _ _) = [ident]
+               isImageIdent _ = []
+           modify $ \s -> s{ stImageRefs = query isImageIdent blocks }
            m <- metaToContext opts
                   (blocksToOpenDocument opts)
                   (fmap chomp . inlinesToOpenDocument opts)
@@ -581,10 +599,6 @@ inlineToOpenDocument o ils
     where
       preformatted s = handleSpaces $ escapeStringForXML s
       inlinedCode s = return $ inTags False "text:span" [("text:style-name", "Source_Text")] s
-      mkLink   s t = inTags False "text:a" [ ("xlink:type" , "simple")
-                                           , ("xlink:href" , s       )
-                                           , ("office:name", t       )
-                                           ] . inSpanTags "Definition"
       mkImg (_, _, kvs) s _ = do
                id' <- gets stImageId
                modify (\st -> st{ stImageId = id' + 1 })
@@ -610,6 +624,20 @@ inlineToOpenDocument o ils
         nn <- footNote <$> withParagraphStyle o "Footnote" l
         addNote nn
         return nn
+
+mkLink :: Text -> Text -> Doc Text -> Doc Text
+mkLink s t =
+        let numberReference =
+              case T.uncons s of
+                Just ('#', ident) -> inTags False "text:bookmark-ref"
+                                     [ ("text:reference-format", "text" ),
+                                       ("text:ref-name", ident) ]
+                                     . inSpanTags "Definition"
+                _ -> mempty
+        in numberReference <$> inTags False "text:a" [ ("xlink:type" , "simple")
+                                                   , ("xlink:href" , s       )
+                                                   , ("office:name", t       )
+                                                   ] . inSpanTags "Definition"
 
 bulletListStyle :: PandocMonad m => Int -> OD m (Int,(Int,[Doc Text]))
 bulletListStyle l = do
