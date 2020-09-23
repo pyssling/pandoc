@@ -627,14 +627,14 @@ inlineToOpenDocument o ils
 
 mkLink :: Text -> Text -> Doc Text -> Doc Text
 mkLink s t =
-        let numberReference =
-              case T.uncons s of
-                Just ('#', ident) -> inTags False "text:bookmark-ref"
+  let headerReference ident = inTags False "text:bookmark-ref"
                                      [ ("text:reference-format", "text" ),
                                        ("text:ref-name", ident) ]
                                      . inSpanTags "Definition"
-                _ -> mempty
-        in numberReference <$> inTags False "text:a" [ ("xlink:type" , "simple")
+      numberReference = case T.uncons s of
+        Just ('#', ident) -> headerReference ident
+        _ -> mempty
+  in numberReference <$> inTags False "text:a" [ ("xlink:type" , "simple")
                                                    , ("xlink:href" , s       )
                                                    , ("office:name", t       )
                                                    ] . inSpanTags "Definition"
