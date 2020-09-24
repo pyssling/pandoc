@@ -846,6 +846,7 @@ parseBlock (Elem e) =
                      items' <- mapM getBlocks items
                      return (mconcat $ intersperse (str "; ") terms', items')
          parseTable = do
+                      let ident = attrValue "id" e
                       let isCaption x = named "title" x || named "caption" x
                       capt <- case filterChild isCaption e of
                                     Just t  -> getInlines t

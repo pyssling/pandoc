@@ -242,11 +242,9 @@ writeOpenDocument opts (Pandoc meta blocks) = do
            let isHeaderIdent (Header _ (ident,_,_) _) = [ident]
                isHeaderIdent _ = []
            modify $ \s -> s{ stHeaderRefs = query isHeaderIdent blocks }
--- Table Attr Caption [ColSpec] TableHead [TableBody] TableFoot           
            let isTableIdent (Table (ident,_,_) _ _ _ _ _) = [ident]
                isTableIdent _ = []
            modify $ \s -> s{ stTableRefs = query isTableIdent blocks }
--- [Image ("file-menu",[],[("width","40%")]) [Str "File",Space,Str "Menu."] ("figures/file-menu.png","fig:")]           
            let isImageIdent (Image (ident,_,_) _ _) = [ident]
                isImageIdent _ = []
            modify $ \s -> s{ stImageRefs = query isImageIdent blocks }
@@ -388,7 +386,7 @@ blockToOpenDocument o bs
     | BulletList     b <- bs = setFirstPara >> bulletListToOpenDocument o b
     | OrderedList  a b <- bs = setFirstPara >> orderedList a b
     | CodeBlock    _ s <- bs = setFirstPara >> preformatted s
-    | Table _ bc s th tb _ <- bs =  setFirstPara >> table bc s th tb
+    | Table a bc s th tb _ <- bs =  setFirstPara >> table a bc s th tb
     | HorizontalRule   <- bs = setFirstPara >> return (selfClosingTag "text:p"
                                 [ ("text:style-name", "Horizontal_20_Line") ])
     | RawBlock f     s <- bs = if f == Format "opendocument"
@@ -412,9 +410,9 @@ blockToOpenDocument o bs
                            inTags True "text:list" [ ("text:style-name", "L" <> tshow ln)]
                                       <$> orderedListToOpenDocument o pn b
       table :: PandocMonad m =>
-               Caption -> [ColSpec] -> TableHead -> [TableBody] ->
+               Attr -> Caption -> [ColSpec] -> TableHead -> [TableBody] ->
                OD m (Doc Text)
-      table (Caption _ c) cs h b = do
+      table (ref, _, _) (Caption _ c) cs h b = do
         tn <- length <$> gets stTableStyles
         pn <- length <$> gets stParaStyles
         let  genIds      = map chr [65..]
@@ -435,7 +433,7 @@ blockToOpenDocument o bs
                       then return empty
                       else inlinesToOpenDocument o (blocksToInlines c) >>=
                              if isEnabled Ext_native_numbering o
-                                then numberedTableCaption
+                                then numberedTableCaption ref
                                 else unNumberedCaption "TableCaption"
         th <- colHeadsToOpenDocument o (map fst paraHStyles) h
         tr <- mapM (tableBodyToOpenDocument o (map fst paraStyles)) b
@@ -447,33 +445,37 @@ blockToOpenDocument o bs
       figure attr caption source title | null caption =
         withParagraphStyle o "Figure" [Para [Image attr caption (source,title)]]
                                   | otherwise    = do
+        let (ref, _, _) = attr
         imageDoc <- withParagraphStyle o "FigureWithCaption" [Para [Image attr caption (source,title)]]
         captionDoc <- inlinesToOpenDocument o caption >>=
                          if isEnabled Ext_native_numbering o
-                            then numberedFigureCaption
+                            then numberedFigureCaption ref
                             else unNumberedCaption "FigureCaption"
         return $ imageDoc $$ captionDoc
 
 
-numberedTableCaption :: PandocMonad m => Doc Text -> OD m (Doc Text)
-numberedTableCaption caption = do
+numberedTableCaption :: PandocMonad m => Text -> Doc Text -> OD m (Doc Text)
+numberedTableCaption ref caption = do
     id' <- gets stTableCaptionId
     modify (\st -> st{ stTableCaptionId = id' + 1 })
     capterm <- translateTerm Term.Table
-    return $ numberedCaption "TableCaption" capterm "Table" id' caption
+    return $ numberedCaption "TableCaption" capterm "Table" id' ref caption
 
-numberedFigureCaption :: PandocMonad m => Doc Text -> OD m (Doc Text)
-numberedFigureCaption caption = do
+numberedFigureCaption :: PandocMonad m => Text -> Doc Text -> OD m (Doc Text)
+numberedFigureCaption ref caption = do
     id' <- gets stImageCaptionId
     modify (\st -> st{ stImageCaptionId = id' + 1 })
     capterm <- translateTerm Term.Figure
-    return $ numberedCaption "FigureCaption" capterm "Illustration" id' caption
+    return $ numberedCaption "FigureCaption" capterm  "Illustration" id' ref caption
 
-numberedCaption :: Text -> Text -> Text -> Int -> Doc Text -> Doc Text
-numberedCaption style term name num caption =
+numberedCaption :: Text -> Text -> Text -> Int -> Text -> Doc Text -> Doc Text
+numberedCaption style term name num ref caption =
     let t = text $ T.unpack term
         r = num - 1
-        s = inTags False "text:sequence" [ ("text:ref-name", "ref" <> name <> tshow r),
+        ref' = case ref of
+          "" -> name <> tshow r
+          _ -> ref
+        s = inTags False "text:sequence" [ ("text:ref-name", ref'),
                                            ("text:name", name),
                                            ("text:formula", "ooow:" <> name <> "+1"),
                                            ("style:num-format", "1") ] $ text $ show num
@@ -593,7 +595,11 @@ inlineToOpenDocument o ils
                        else do
                          report $ InlineNotRendered ils
                          return empty
-    Link _ l (s,t) ->  mkLink s t <$> inlinesToOpenDocument o l
+    Link _ l (s,t) -> do
+      hrefs <- gets stHeaderRefs
+      trefs <- gets stTableRefs
+      irefs <- gets stImageRefs
+      mkLink hrefs trefs irefs s t <$> inlinesToOpenDocument o l
     Image attr _ (s,t) -> mkImg attr s t
     Note        l  -> mkNote l
     where
@@ -625,19 +631,33 @@ inlineToOpenDocument o ils
         addNote nn
         return nn
 
-mkLink :: Text -> Text -> Doc Text -> Doc Text
-mkLink s t =
-  let headerReference ident = inTags False "text:bookmark-ref"
+--selfClosingTag "text:s" []
+mkLink :: [Text] -> [Text] -> [Text] -> Text -> Text -> Doc Text -> Doc Text
+mkLink hrefs trefs irefs s t =
+  let isHeaderRef ident = elem ident hrefs
+      isTableRef ident = elem ident trefs
+      isImageRef ident = elem ident irefs
+      headerReference ident = inTags False "text:bookmark-ref"
+                                     [ ("text:reference-format", "number" ),
+                                       ("text:ref-name", ident) ]
+                               <>
+                               inTags False "text:bookmark-ref"
                                      [ ("text:reference-format", "text" ),
                                        ("text:ref-name", ident) ]
-                                     . inSpanTags "Definition"
-      numberReference = case T.uncons s of
-        Just ('#', ident) -> headerReference ident
-        _ -> mempty
-  in numberReference <$> inTags False "text:a" [ ("xlink:type" , "simple")
-                                                   , ("xlink:href" , s       )
-                                                   , ("office:name", t       )
-                                                   ] . inSpanTags "Definition"
+      tableReference ident = inTags False "text:bookmark-ref"
+                                     [ ("text:reference-format", "text" ),
+                                       ("text:ref-name", ident) ]
+      imageReference ident = inTags False "text:sequence-ref"
+                                     [ ("text:reference-format", "text" ),
+                                       ("text:ref-name", ident) ]
+      in case T.uncons s of
+        Just ('#', ident) | isHeaderRef ident -> headerReference ident
+                          | isTableRef ident -> tableReference ident
+                          | isImageRef ident -> imageReference ident
+        _ -> inTags False "text:a" [ ("xlink:type" , "simple")
+                                       , ("xlink:href" , s       )
+                                       , ("office:name", t       )
+                                       ] . inSpanTags "Definition"
 
 bulletListStyle :: PandocMonad m => Int -> OD m (Int,(Int,[Doc Text]))
 bulletListStyle l = do
