@@ -631,7 +631,7 @@ inlineToOpenDocument o ils
         addNote nn
         return nn
 
---selfClosingTag "text:s" []
+--
 mkLink :: [Text] -> [Text] -> [Text] -> Text -> Text -> Doc Text -> Doc Text
 mkLink hrefs trefs irefs s t =
   let isHeaderRef ident = elem ident hrefs
@@ -640,6 +640,8 @@ mkLink hrefs trefs irefs s t =
       headerReference ident = inTags False "text:bookmark-ref"
                                      [ ("text:reference-format", "number" ),
                                        ("text:ref-name", ident) ]
+                               <>
+                               selfClosingTag "text:s" []
                                <>
                                inTags False "text:bookmark-ref"
                                      [ ("text:reference-format", "text" ),
