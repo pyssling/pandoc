@@ -633,33 +633,34 @@ inlineToOpenDocument o ils
 
 --
 mkLink :: [Text] -> [Text] -> [Text] -> Text -> Text -> Doc Text -> Doc Text
-mkLink hrefs trefs irefs s t =
+mkLink hrefs trefs irefs s t d =
   let isHeaderRef ident = elem ident hrefs
       isTableRef ident = elem ident trefs
       isImageRef ident = elem ident irefs
       headerReference ident = inTags False "text:bookmark-ref"
                                      [ ("text:reference-format", "number" ),
-                                       ("text:ref-name", ident) ]
+                                       ("text:ref-name", ident) ] d
                                <>
                                selfClosingTag "text:s" []
                                <>
                                inTags False "text:bookmark-ref"
                                      [ ("text:reference-format", "text" ),
-                                       ("text:ref-name", ident) ]
+                                       ("text:ref-name", ident) ] d
       tableReference ident = inTags False "text:bookmark-ref"
                                      [ ("text:reference-format", "text" ),
-                                       ("text:ref-name", ident) ]
+                                       ("text:ref-name", ident) ] d
       imageReference ident = inTags False "text:sequence-ref"
                                      [ ("text:reference-format", "text" ),
-                                       ("text:ref-name", ident) ]
-      in case T.uncons s of
-        Just ('#', ident) | isHeaderRef ident -> headerReference ident
-                          | isTableRef ident -> tableReference ident
-                          | isImageRef ident -> imageReference ident
-        _ -> inTags False "text:a" [ ("xlink:type" , "simple")
-                                       , ("xlink:href" , s       )
-                                       , ("office:name", t       )
-                                       ] . inSpanTags "Definition"
+                                       ("text:ref-name", ident) ] d
+      link = case T.uncons s of
+               Just ('#', ident) | isHeaderRef ident -> headerReference ident
+                                 | isTableRef ident -> tableReference ident
+                                 | isImageRef ident -> imageReference ident
+               _ -> inTags False "text:a" [ ("xlink:type" , "simple")
+                                          , ("xlink:href" , s       )
+                                          , ("office:name", t       )
+                                          ] d
+      in inTags False "text:span" [("text:style-name","Definition")] $ link 
 
 bulletListStyle :: PandocMonad m => Int -> OD m (Int,(Int,[Doc Text]))
 bulletListStyle l = do
