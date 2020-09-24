@@ -660,7 +660,7 @@ mkLink hrefs trefs irefs s t d =
                                           , ("xlink:href" , s       )
                                           , ("office:name", t       )
                                           ] d
-      in inTags False "text:span" [("text:style-name","Definition")] $ link 
+      in inSpanTags "Definition" $ link
 
 bulletListStyle :: PandocMonad m => Int -> OD m (Int,(Int,[Doc Text]))
 bulletListStyle l = do
